@@ -21,7 +21,7 @@ const App = () => {
                     const signer = await provider.getSigner();
                     
                     // Replace with your deployed contract address
-                    const address = "0x9132B1689A8Cb911546Bcc3Ff5161Cf2aD327709"; 
+                    const address = "0x01e69f5F8B8cFBEEB58B18094aCaA6D45B1376cd"; 
                     
                     // Create contract instance
                     const campaignContract = new ethers.Contract(address, CampaignABI.abi, signer);
