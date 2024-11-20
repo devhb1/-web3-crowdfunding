@@ -1,19 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 
-const CampaignList = ({ campaigns, contract, account }) => {
+const CampaignList = ({ campaigns, contract, account, onCampaignUpdate }) => {
     const [timeLeft, setTimeLeft] = useState({});
     const [campaignStatuses, setCampaignStatuses] = useState({});
+    const [donors, setDonors] = useState({});
+    const [showDonors, setShowDonors] = useState({});
 
     useEffect(() => {
         const fetchCampaignStatuses = async () => {
             const statuses = {};
-            for (let i = 0; i < campaigns.length; i++) {
+            for (let campaign of campaigns) {
                 try {
-                    const status = await contract.getCampaignStatus(i + 1);
-                    statuses[i] = status;
+                    const status = await contract.getCampaignStatus(campaign.id);
+                    statuses[campaign.id] = status;
                 } catch (error) {
-                    console.error(`Error fetching status for campaign ${i + 1}:`, error);
+                    console.error(`Error fetching status for campaign ${campaign.id}:`, error);
                 }
             }
             setCampaignStatuses(statuses);
@@ -21,40 +23,38 @@ const CampaignList = ({ campaigns, contract, account }) => {
 
         if (contract && campaigns.length > 0) {
             fetchCampaignStatuses();
+            updateTimeLeft();
         }
     }, [campaigns, contract]);
 
     useEffect(() => {
-        const timer = setInterval(() => {
-            const now = Math.floor(Date.now() / 1000);
-            const updatedTimeLeft = {};
-            
-            campaigns.forEach((campaign, index) => {
-                const deadline = parseInt(campaign.deadline);
-                if (now < deadline) {
-                    const seconds = deadline - now;
-                    const days = Math.floor(seconds / 86400);
-                    const hours = Math.floor((seconds % 86400) / 3600);
-                    const minutes = Math.floor((seconds % 3600) / 60);
-                    const remainingSeconds = seconds % 60;
-                    
-                    let timeString = '';
-                    if (days > 0) timeString += `${days}d `;
-                    if (hours > 0) timeString += `${hours}h `;
-                    if (minutes > 0) timeString += `${minutes}m `;
-                    timeString += `${remainingSeconds}s`;
-                    
-                    updatedTimeLeft[index] = timeString;
-                } else {
-                    updatedTimeLeft[index] = "Ended";
-                }
-            });
-            
-            setTimeLeft(updatedTimeLeft);
-        }, 1000);
-
+        const timer = setInterval(updateTimeLeft, 1000);
         return () => clearInterval(timer);
     }, [campaigns]);
+
+    const updateTimeLeft = () => {
+        const times = {};
+        campaigns.forEach(campaign => {
+            const deadline = parseInt(campaign.deadline);
+            const now = Math.floor(Date.now() / 1000);
+            times[campaign.id] = deadline > now ? deadline - now : 0;
+        });
+        setTimeLeft(times);
+    };
+
+    const fetchDonors = async (campaignId) => {
+        try {
+            const [donorAddresses, donationAmounts] = await contract.getDonors(campaignId);
+            const donorsList = donorAddresses.map((address, i) => ({
+                address,
+                amount: ethers.formatEther(donationAmounts[i].toString())
+            }));
+            setDonors(prev => ({ ...prev, [campaignId]: donorsList }));
+            setShowDonors(prev => ({ ...prev, [campaignId]: true }));
+        } catch (error) {
+            console.error("Error fetching donors:", error);
+        }
+    };
 
     const handleDonate = async (campaignId) => {
         const amount = prompt("Enter the amount in ETH you want to donate:");
@@ -62,33 +62,18 @@ const CampaignList = ({ campaigns, contract, account }) => {
 
         try {
             const parsedAmount = ethers.parseEther(amount);
+            const campaign = campaigns.find(c => c.id === campaignId);
+            const remainingGoal = ethers.toBigInt(campaign.goal) - ethers.toBigInt(campaign.raisedAmount);
             
-            const signer = await contract.runner.provider.getSigner();
-            const balance = await contract.runner.provider.getBalance(await signer.getAddress());
-            
-            const gasEstimate = await contract.donate.estimateGas(campaignId, { 
-                value: parsedAmount 
-            });
-            
-            const gasPrice = await contract.runner.provider.getFeeData();
-            const gasCost = gasEstimate * gasPrice.gasPrice;
-            
-            const totalCost = parsedAmount + gasCost;
-
-            if (balance < totalCost) {
-                const requiredEth = ethers.formatEther(totalCost);
-                const balanceEth = ethers.formatEther(balance);
-                alert(`Insufficient funds. You need approximately ${requiredEth} ETH for this transaction (including gas fees). Your current balance is ${balanceEth} ETH.`);
+            if (parsedAmount > remainingGoal) {
+                alert(`Maximum donation amount for this campaign is ${ethers.formatEther(remainingGoal)} ETH`);
                 return;
             }
 
-            const tx = await contract.donate(campaignId, { 
-                value: parsedAmount,
-                gasLimit: gasEstimate
-            });
+            const tx = await contract.donate(campaignId, { value: parsedAmount });
             await tx.wait();
+            onCampaignUpdate();
             alert("Donation successful!");
-            window.location.reload();
         } catch (error) {
             console.error("Error during donation:", error);
             alert(error.message || "Donation failed. Please try again.");
@@ -99,94 +84,110 @@ const CampaignList = ({ campaigns, contract, account }) => {
         try {
             const tx = await contract.withdrawFunds(campaignId);
             await tx.wait();
-            alert("Funds withdrawn successfully!");
-            window.location.reload();
+            onCampaignUpdate();
+            alert("Withdrawal successful!");
         } catch (error) {
-            console.error("Error withdrawing funds:", error);
+            console.error("Error during withdrawal:", error);
             alert(error.message || "Withdrawal failed. Please try again.");
         }
     };
 
-    const getProgressBarColor = (campaign, status) => {
-        if (!status) return "bg-gray-500";
-        
-        const hasEnded = status.hasEnded;
-        const goalReached = status.hasReachedGoal;
-        
-        if (!hasEnded && !goalReached) return "bg-green-500";
-        if (goalReached) return "bg-yellow-500";
-        return "bg-red-500";
+    const formatTime = (seconds) => {
+        if (seconds <= 0) return "Ended";
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = seconds % 60;
+
+        if (days > 0) return `${days}d ${hours}h`;
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        if (minutes > 0) return `${minutes}m ${secs}s`;
+        return `${secs}s`;
     };
 
     return (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-8">
-            {campaigns.map((campaign, index) => {
-                const goal = ethers.formatEther(campaign.goal.toString());
-                const raised = ethers.formatEther(campaign.raisedAmount.toString());
+            {campaigns.map((campaign) => {
+                const goal = ethers.formatEther(campaign.goal);
+                const raised = ethers.formatEther(campaign.raisedAmount);
                 const percentage = (parseFloat(raised) / parseFloat(goal)) * 100;
                 const isCampaignOwner = account === campaign.fundraiser;
-                const status = campaignStatuses[index];
+                const status = campaignStatuses[campaign.id];
+                const campaignDonors = donors[campaign.id] || [];
 
                 return (
-                    <div key={index} className="border rounded-xl p-6 bg-white shadow-lg hover:shadow-xl transition-shadow duration-300">
+                    <div key={campaign.id} className="border rounded-xl p-6 bg-white shadow-lg hover:shadow-xl transition-shadow duration-300">
+                        <h3 className="text-xl font-bold mb-2">{campaign.title}</h3>
+                        <p className="text-gray-600 mb-4">{campaign.story}</p>
+
                         <div className="space-y-4">
-                            <h2 className="text-2xl font-bold text-gray-800">{campaign.title}</h2>
-                            <p className="text-gray-600 line-clamp-3">{campaign.story}</p>
-                            
-                            <div className="space-y-2">
-                                <div className="flex justify-between text-sm text-gray-600">
-                                    <span>Goal:</span>
-                                    <span className="font-semibold">{goal} ETH</span>
+                            <div>
+                                <div className="flex justify-between text-sm mb-1">
+                                    <span>Progress</span>
+                                    <span>{percentage.toFixed(1)}%</span>
                                 </div>
-                                <div className="flex justify-between text-sm text-gray-600">
-                                    <span>Raised:</span>
-                                    <span className="font-semibold">{raised} ETH</span>
+                                <div className="w-full bg-gray-200 rounded-full h-2">
+                                    <div
+                                        className="bg-blue-500 rounded-full h-2"
+                                        style={{ width: `${Math.min(100, percentage)}%` }}
+                                    ></div>
                                 </div>
-                                
-                                <div className="relative pt-1">
-                                    <div className="flex mb-2 items-center justify-between">
-                                        <div>
-                                            <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full bg-gray-200">
-                                                Progress
-                                            </span>
-                                        </div>
-                                        <div className="text-right">
-                                            <span className="text-xs font-semibold inline-block text-gray-600">
-                                                {percentage.toFixed(1)}%
-                                            </span>
-                                        </div>
-                                    </div>
-                                    <div className="flex h-2 mb-4 overflow-hidden rounded bg-gray-200">
-                                        <div
-                                            className={`transition-all duration-300 ${getProgressBarColor(campaign, status)}`}
-                                            style={{ width: `${Math.min(percentage, 100)}%` }}
-                                        />
-                                    </div>
+                                <div className="flex justify-between text-sm mt-1">
+                                    <span>{raised} ETH raised</span>
+                                    <span>{goal} ETH goal</span>
                                 </div>
                             </div>
-                            
-                            <div className="text-sm font-medium text-gray-600">
-                                Time left: {timeLeft[index] || "Loading..."}
+
+                            <div className="text-sm text-gray-600">
+                                Time left: {formatTime(timeLeft[campaign.id] || 0)}
                             </div>
 
                             <div className="space-y-2 pt-2">
                                 {status?.isActive && (
                                     <button
-                                        onClick={() => handleDonate(index + 1)}
+                                        onClick={() => handleDonate(campaign.id)}
                                         className="w-full px-4 py-2 text-white bg-green-500 rounded-lg hover:bg-green-600 transition-colors duration-300"
                                     >
                                         Donate Now
                                     </button>
                                 )}
                                 
-                                {isCampaignOwner && status && !status.isWithdrawn && 
-                                 (status.hasEnded || status.hasReachedGoal) && (
+                                {(!status?.isActive || timeLeft[campaign.id] <= 0) && 
+                                 isCampaignOwner && 
+                                 !status?.isWithdrawn && (
                                     <button
-                                        onClick={() => handleWithdraw(index + 1)}
+                                        onClick={() => handleWithdraw(campaign.id)}
                                         className="w-full px-4 py-2 text-white bg-blue-500 rounded-lg hover:bg-blue-600 transition-colors duration-300"
                                     >
                                         Withdraw Funds
                                     </button>
+                                )}
+
+                                <button
+                                    onClick={() => fetchDonors(campaign.id)}
+                                    className="w-full px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors duration-300"
+                                >
+                                    {showDonors[campaign.id] ? 'Hide Donors' : 'Show Donors'}
+                                </button>
+
+                                {showDonors[campaign.id] && (
+                                    <div className="mt-4 border-t pt-4">
+                                        <h4 className="font-semibold mb-2">Donors:</h4>
+                                        {campaignDonors.length > 0 ? (
+                                            <div className="max-h-40 overflow-y-auto">
+                                                {campaignDonors.map((donor, i) => (
+                                                    <div key={i} className="text-sm py-1 flex justify-between">
+                                                        <span className="text-gray-600">
+                                                            {donor.address.slice(0, 6)}...{donor.address.slice(-4)}
+                                                        </span>
+                                                        <span className="font-medium">{donor.amount} ETH</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <p className="text-sm text-gray-500">No donors yet</p>
+                                        )}
+                                    </div>
                                 )}
                             </div>
                         </div>

@@ -2,8 +2,8 @@
   "_format": "hh-sol-cache-2",
   "files": {
     "/Users/harshit/Desktop/-web3-crowdfunding/backend/contracts/Campaign.sol": {
-      "lastModificationDate": 1732101676182,
-      "contentHash": "1b00b093f781d2230c997987cdef5670",
+      "lastModificationDate": 1732102725484,
+      "contentHash": "660764d371b3e7a5549245d0cb883c9a",
       "sourceName": "contracts/Campaign.sol",
       "solcConfig": {
         "version": "0.8.0",

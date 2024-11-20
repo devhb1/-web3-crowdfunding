@@ -12,6 +12,8 @@ contract Campaign {
         string imageUrl;
         bool isActive;
         bool isWithdrawn;
+        address[] donors;         // Array to track unique donors
+        mapping(address => uint) donations; // Track donation amounts per donor
     }
 
     mapping(uint => CampaignData) public campaigns;
@@ -40,7 +42,6 @@ contract Campaign {
         require(_goal > 0, "Goal must be greater than 0");
         require(_duration > 0, "Duration must be greater than 0");
         
-        // Verify duration is valid
         bool validDuration = false;
         for(uint i = 0; i < availableDurations.length; i++) {
             if(_duration == availableDurations[i]) {
@@ -51,17 +52,16 @@ contract Campaign {
         require(validDuration, "Invalid duration selected");
         
         campaignCount++;
-        campaigns[campaignCount] = CampaignData({
-            title: _title,
-            fundraiser: payable(msg.sender),
-            goal: _goal,
-            raisedAmount: 0,
-            deadline: block.timestamp + _duration,
-            story: _story,
-            imageUrl: _imageUrl,
-            isActive: true,
-            isWithdrawn: false
-        });
+        CampaignData storage newCampaign = campaigns[campaignCount];
+        newCampaign.title = _title;
+        newCampaign.fundraiser = payable(msg.sender);
+        newCampaign.goal = _goal;
+        newCampaign.raisedAmount = 0;
+        newCampaign.deadline = block.timestamp + _duration;
+        newCampaign.story = _story;
+        newCampaign.imageUrl = _imageUrl;
+        newCampaign.isActive = true;
+        newCampaign.isWithdrawn = false;
 
         emit CampaignCreated(campaignCount, msg.sender);
     }
@@ -73,6 +73,10 @@ contract Campaign {
         require(msg.value > 0, "Must send ether to donate");
         require(campaign.raisedAmount + msg.value <= campaign.goal, "Donation would exceed campaign goal");
         
+        if(campaign.donations[msg.sender] == 0) {
+            campaign.donors.push(msg.sender);
+        }
+        campaign.donations[msg.sender] += msg.value;
         campaign.raisedAmount += msg.value;
         
         emit DonationReceived(_campaignId, msg.sender, msg.value);
@@ -81,6 +85,21 @@ contract Campaign {
         if (campaign.raisedAmount >= campaign.goal) {
             campaign.isActive = false;
         }
+    }
+
+    function getDonors(uint _campaignId) public view returns (address[] memory, uint[] memory) {
+        CampaignData storage campaign = campaigns[_campaignId];
+        uint[] memory amounts = new uint[](campaign.donors.length);
+        
+        for(uint i = 0; i < campaign.donors.length; i++) {
+            amounts[i] = campaign.donations[campaign.donors[i]];
+        }
+        
+        return (campaign.donors, amounts);
+    }
+
+    function getDonationAmount(uint _campaignId, address donor) public view returns (uint) {
+        return campaigns[_campaignId].donations[donor];
     }
 
     function withdrawFunds(uint _campaignId) public {
@@ -105,7 +124,8 @@ contract Campaign {
         bool hasReachedGoal,
         bool hasEnded,
         bool isWithdrawn,
-        uint timeLeft
+        uint timeLeft,
+        uint donorCount
     ) {
         CampaignData storage campaign = campaigns[_campaignId];
         isActive = campaign.isActive;
@@ -113,5 +133,6 @@ contract Campaign {
         hasEnded = block.timestamp >= campaign.deadline;
         isWithdrawn = campaign.isWithdrawn;
         timeLeft = block.timestamp >= campaign.deadline ? 0 : campaign.deadline - block.timestamp;
+        donorCount = campaign.donors.length;
     }
 }
