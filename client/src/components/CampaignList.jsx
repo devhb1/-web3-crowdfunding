@@ -1,28 +1,61 @@
-// src/components/CampaignList.jsx
-
 import React from 'react';
 import { ethers } from 'ethers';
 
 const CampaignList = ({ campaigns, contract }) => {
     const handleDonate = async (campaignId) => {
         const amount = prompt("Enter the amount in ETH you want to donate:");
-        if (amount) {
+        if (!amount) return;
+
+        try {
             const parsedAmount = ethers.parseEther(amount);
-            const goal = ethers.BigInt(campaigns[campaignId - 1].goal); // Get goal from campaigns
-            const raisedAmount = ethers.BigInt(campaigns[campaignId - 1].raisedAmount); // Get raised amount from campaigns
             
-            if (parsedAmount + raisedAmount > goal) {
+            // Get the signer's balance
+            const signer = await contract.runner.provider.getSigner();
+            const balance = await contract.runner.provider.getBalance(await signer.getAddress());
+            
+            // Get gas estimate
+            const gasEstimate = await contract.donate.estimateGas(campaignId, { 
+                value: parsedAmount 
+            });
+            
+            // Get gas price
+            const gasPrice = await contract.runner.provider.getFeeData();
+            const gasCost = gasEstimate * gasPrice.gasPrice;
+            
+            // Calculate total cost (donation + gas)
+            const totalCost = parsedAmount + gasCost;
+
+            // Check if user has enough funds
+            if (balance < totalCost) {
+                const requiredEth = ethers.formatEther(totalCost);
+                const balanceEth = ethers.formatEther(balance);
+                alert(`Insufficient funds. You need approximately ${requiredEth} ETH for this transaction (including gas fees). Your current balance is ${balanceEth} ETH.`);
+                return;
+            }
+
+            // Convert strings to BigInt using JavaScript's native BigInt
+            const goal = BigInt(campaigns[campaignId - 1].goal);
+            const raisedAmount = BigInt(campaigns[campaignId - 1].raisedAmount);
+            const parsedAmountBigInt = BigInt(parsedAmount);
+
+            if (parsedAmountBigInt + raisedAmount > goal) {
                 alert("Donation exceeds campaign goal!");
                 return;
             }
 
-            try {
-                const tx = await contract.donate(campaignId, { value: parsedAmount });
-                await tx.wait();
-                alert("Donation successful!");
-                // Optionally refresh campaigns here
-            } catch (error) {
-                console.error("Error during donation:", error);
+            // If all checks pass, proceed with the donation
+            const tx = await contract.donate(campaignId, { 
+                value: parsedAmount,
+                gasLimit: gasEstimate // Explicitly set gas limit
+            });
+            await tx.wait();
+            alert("Donation successful!");
+            // Optionally refresh campaigns here
+        } catch (error) {
+            console.error("Error during donation:", error);
+            if (error.code === 'INSUFFICIENT_FUNDS') {
+                alert("Insufficient funds to complete the transaction. Please make sure you have enough ETH to cover both the donation and gas fees.");
+            } else {
                 alert("Donation failed. Please try again.");
             }
         }
@@ -49,8 +82,8 @@ const CampaignList = ({ campaigns, contract }) => {
                             />
                         </div>
                         <p>Deadline: {new Date(campaign.deadline * 1000).toLocaleString()}</p>
-                        <button 
-                            onClick={() => handleDonate(index + 1)} // Pass campaign ID (1-based index)
+                        <button
+                            onClick={() => handleDonate(index + 1)}
                             className="bg-green-500 text-white px-4 py-2 rounded mt-2"
                         >
                             Donate
