@@ -82,6 +82,30 @@ const CampaignList = ({ campaigns, contract, account, onCampaignUpdate }) => {
 
     const handleWithdraw = async (campaignId) => {
         try {
+            const campaigns = await contract.campaigns(campaignId);
+            const status = await contract.getCampaignStatus(campaignId);
+    
+            // Check withdrawal conditions
+            const isOwner = campaigns.fundraiser.toLowerCase() === account.toLowerCase();
+            const isEnded = status.hasEnded;
+            const hasReachedGoal = status.hasReachedGoal;
+            const isNotWithdrawn = !campaigns.isWithdrawn;
+    
+            if (!isOwner) {
+                alert("Only campaign owner can withdraw funds.");
+                return;
+            }
+    
+            if (!isEnded && !hasReachedGoal) {
+                alert("Campaign must be ended or goal reached to withdraw.");
+                return;
+            }
+    
+            if (!isNotWithdrawn) {
+                alert("Funds have already been withdrawn.");
+                return;
+            }
+    
             const tx = await contract.withdrawFunds(campaignId);
             await tx.wait();
             onCampaignUpdate();
@@ -91,7 +115,6 @@ const CampaignList = ({ campaigns, contract, account, onCampaignUpdate }) => {
             alert(error.message || "Withdrawal failed. Please try again.");
         }
     };
-
     const formatTime = (seconds) => {
         if (seconds <= 0) return "Ended";
         const days = Math.floor(seconds / 86400);
@@ -111,9 +134,17 @@ const CampaignList = ({ campaigns, contract, account, onCampaignUpdate }) => {
                 const goal = ethers.formatEther(campaign.goal);
                 const raised = ethers.formatEther(campaign.raisedAmount);
                 const percentage = (parseFloat(raised) / parseFloat(goal)) * 100;
-                const isCampaignOwner = account === campaign.fundraiser;
+                const isCampaignOwner = account.toLowerCase() === campaign.fundraiser.toLowerCase();
                 const status = campaignStatuses[campaign.id];
                 const campaignDonors = donors[campaign.id] || [];
+                const timeLeftSeconds = timeLeft[campaign.id] || 0;
+
+                // Determine if withdrawal is possible
+                const canWithdraw = 
+                    isCampaignOwner && 
+                    status && 
+                    (!status.isActive || timeLeftSeconds <= 0) && 
+                    !status.isWithdrawn;
 
                 return (
                     <div key={campaign.id} className="border rounded-xl p-6 bg-white shadow-lg hover:shadow-xl transition-shadow duration-300">
@@ -139,7 +170,7 @@ const CampaignList = ({ campaigns, contract, account, onCampaignUpdate }) => {
                             </div>
 
                             <div className="text-sm text-gray-600">
-                                Time left: {formatTime(timeLeft[campaign.id] || 0)}
+                                Time left: {formatTime(timeLeftSeconds)}
                             </div>
 
                             <div className="space-y-2 pt-2">
@@ -152,9 +183,7 @@ const CampaignList = ({ campaigns, contract, account, onCampaignUpdate }) => {
                                     </button>
                                 )}
                                 
-                                {(!status?.isActive || timeLeft[campaign.id] <= 0) && 
-                                 isCampaignOwner && 
-                                 !status?.isWithdrawn && (
+                                {canWithdraw && (
                                     <button
                                         onClick={() => handleWithdraw(campaign.id)}
                                         className="w-full px-4 py-2 text-white bg-blue-500 rounded-lg hover:bg-blue-600 transition-colors duration-300"
